@@ -8,14 +8,16 @@ import numpy as np
 import json
 import os
 import time
+import heapq
+from pathlib import Path
 
 class hp_search_base(object):
     
-    def __init__(self, experiment_name='experiment', log_folder = None, search_method='random', seed=66, fixed_params_class_attr_name = 'fixed_params', **kwargs):
+    def __init__(self, experiment_name='experiment', experiment_folder = None, search_method='random', seed=66, fixed_params_class_attr_name = 'fixed_params', **kwargs):
         """
         Args:
             experiment_name (str): uses this to name the results file
-            log_folder (str): the folder of the experiment
+            experiment_folder (str): the folder of the experiment
             search_method (str): One of 'random', 'grid_search'
             seed (int): random seed used for 'random' rearch method
             fixed_params_class_attr_name (str): Name of the class attribute for fixed params
@@ -26,14 +28,11 @@ class hp_search_base(object):
         if not search_method in ['random', 'grid_search']:
             raise ValueError("Search method {} is not supported".format(search_method) )
         
-        if log_folder is None:
-            raise ValueError("log_folder is a compulsory parameter")
-        
         self.search_method = search_method
         self.seed = seed # required only for random search method
         self.experiment_name = experiment_name
         self.results_file_postfix = '_results.txt' # The experiment result file name is: self.experiment_name + self.results_file_postfix
-        self.log_folder = os.path.abspath(log_folder)
+        self.experiment_folder = Path(experiment_folder).absolute()
         self.fixed_par_name = fixed_params_class_attr_name
         
         fixed_params = self.__class__.__dict__.get(self.fixed_par_name, None)
@@ -50,7 +49,7 @@ class hp_search_base(object):
             print("Extra argument:   {}: {}".format(pn,pv) )
             setattr(self,pn,pv)
             
-        print("Experiment: {}     will log into: {}".format(self.experiment_name, self.log_folder) )
+        print("Experiment: {}     will log into: {}".format(self.experiment_name, self.experiment_folder) )
         
     @classmethod
     def _get_hp_values(cls,):
@@ -61,6 +60,9 @@ class hp_search_base(object):
         hp_names = []
         hp_values = []
         hp_order = []
+        
+        short_names = {}
+        
         for key in cls.__dict__.keys():
             if key.startswith('hp_'):
                 val = cls.__dict__[key]
@@ -71,9 +73,13 @@ class hp_search_base(object):
                     hp_order.append( ( real_key,val['ord']) )
                 if isinstance(val,Sequence):
                     hp_values.append( val )
+                    
+                if val.get('short_name', False):
+                    short_names[real_key] = val['short_name']
+                    
                 hp_names.append( real_key )
                 
-        return hp_names, hp_values, hp_order
+        return hp_names, hp_values, hp_order, short_names
     
     @staticmethod
     def params_values_list_random(seed, hp_names, hp_values, hp_order):
@@ -119,42 +125,57 @@ class hp_search_base(object):
         Outputs the list with all values of hyperparameters.
         """
         
-        hp_names, hp_values, hp_order = self._get_hp_values()
+        hp_names, hp_values, hp_order, short_param_names = self._get_hp_values()
         if self.search_method == 'random':
             params_list = self.params_values_list_random(self.seed, hp_names, hp_values, hp_order)
             
         elif self.search_method == 'grid_search':
             params_list = self.params_values_list_grid(hp_names, hp_values, hp_order)
             
-        return params_list
+        return params_list, short_param_names
     
-    def before_run(self, **kwargs):
+    @staticmethod
+    def run_folder_name(run_ind, params_vals, short_param_names):
+        
+        pv = [(short_param_names.get(kk, kk) + f'={vv}') for (kk,vv) in params_vals.items()]
+        
+        folder_name = str(run_ind) + '__' + '__'.join(pv)
+        folder_name = folder_name.replace('.','_')
+        return folder_name
+    
+    def before_experiment_run(self, **params):
+        pass
+    
+    def before_single_run(self, **run_params):
         pass
         
-    def run(self, parallel=False, max_iter=None, **before_run_params):
+    def run(self, **run_params):
+        raise NotImplemented
+    
+    
+    def experiment_run(self, parallel=False, max_runs=None):
         """
         Args:   
             parallel (bool): Not implemented yet.
-            max_iter (int): How many evaluations are done now.
+            max_runs (int): How many runs are done now.
         Returns:
             None, outputs to the file.
         """
         
-        params_list = self.get_iter_params()
+        params_list, short_param_names = self.get_iter_params()
         
-        # Run 'before_run' ->
-        self.before_run(**before_run_params)
-        # Run 'before_run' <-
+        ## Run 'before_run' ->
+        #self.before_run(**before_run_params)
+        ## Run 'before_run' <-
         
         # Folder and log file ->
-        if not os.path.isdir(self.log_folder): # folder does not exist
-            os.mkdir(self.log_folder)
+        #if not os.path.isdir(self.log_folder): # folder does not exist
+        #    os.mkdir(self.log_folder)
             
-        results_file_path = os.path.join(self.log_folder, self.experiment_name + self.results_file_postfix )
+        #results_file_path = os.path.join(self.log_folder, self.experiment_name + self.results_file_postfix )
         
-        start_ind = self._read_last_evaluation_ind(results_file_path)
+        start_ind = self._read_last_evaluation_ind(self.experiment_folder)
         # Folder and log file <-
-        
         
         print("Start ind: {}".format(start_ind) )
         run_ind = start_ind
@@ -162,54 +183,71 @@ class hp_search_base(object):
             for params_vals in params_list[start_ind:]:
                 print("Run: {},  param values: {}".format(run_ind, params_vals), end =" " )
                 tt = time.time()
-                params_to_train = {**params_vals, **self.fixed_params}
+                params_to_run = {**params_vals, **self.fixed_params}
                 
-                res = self.train(**params_to_train)
+                folder_name = self.run_folder_name(run_ind, params_to_run, short_param_names)
+                
+                params_to_run = self.before_single_run(self.experiment_folder / folder_name, 
+                                                       **params_to_run) # possibly change params.
+                res = self.run(**params_to_run)
                 
                 print("time: {}".format(time.time() - tt) )
-                self._save_evaluation(results_file_path, run_ind, params_vals, self.fixed_params, res)
+                print("\n")
+                #self._save_evaluation(results_file_path, run_ind, params_vals, self.fixed_params, res)
                 run_ind += 1
-                if max_iter is not None:
-                    if (run_ind - start_ind) >= max_iter:
-                        print("Maximum number of iterations reached: {}".format(max_iter) )
+                if max_runs is not None:
+                    if (run_ind - start_ind) >= max_runs:
+                        print("Maximum number of iterations reached: {}".format(max_runs) )
                         return 
         else:
             pass
         print("Experiment finished")
         
+#    @staticmethod
+#    def _save_evaluation(results_file_path, run_ind, params_vals, fixed_params, res):
+#        
+#        #import pdb; pdb.set_trace()
+#        if isinstance(res, Mapping):
+#            output = {'ind': run_ind, 'params': params_vals, 'fixed_params': fixed_params,'results': res }
+#        elif isinstance(res, Sequence):
+#            output = {'ind': run_ind, 'params': params_vals, 'fixed_params': fixed_params, 'results': { i:r for i,r in enumerate(res) } }
+#        else: # assume res is 1 value
+#            output = {'ind': run_ind, 'params': params_vals, 'fixed_params': fixed_params, 'results': { 0:res } }
+#            
+#        results_json = json.dumps( output )
+#        
+#        with open(results_file_path,"a") as ff:
+#            ff.write(results_json + '\n')
+#            ff.flush()
+            
     @staticmethod
-    def _save_evaluation(results_file_path, run_ind, params_vals, fixed_params, res):
+    def _read_last_evaluation_ind(experiment_folder):
         
         #import pdb; pdb.set_trace()
-        if isinstance(res, Mapping):
-            output = {'ind': run_ind, 'params': params_vals, 'fixed_params': fixed_params,'results': res }
-        elif isinstance(res, Sequence):
-            output = {'ind': run_ind, 'params': params_vals, 'fixed_params': fixed_params, 'results': { i:r for i,r in enumerate(res) } }
-        else: # assume res is 1 value
-            output = {'ind': run_ind, 'params': params_vals, 'fixed_params': fixed_params, 'results': { 0:res } }
-            
-        results_json = json.dumps( output )
-        
-        with open(results_file_path,"a") as ff:
-            ff.write(results_json + '\n')
-            ff.flush()
-            
-    @staticmethod
-    def _read_last_evaluation_ind(results_file_path):
-        
-        
-        if os.path.isfile(results_file_path):
-            with open(results_file_path, 'r') as ff:
-                exp_data_txt = ff.readlines()
-            
-            exp_data = []
-            for ll in exp_data_txt:
-                exp_data.append( json.loads(ll) )
-            
-            max_ind = np.max( [dd['ind'] for dd in exp_data] ) + 1
-            return  int(max_ind)
+        heap = []
+        for file_name in Path(experiment_folder).glob(pattern='*'):
+            if file_name.is_dir():
+                spl = str(file_name).split('__')
+                if len(spl) > 1: # there is a part separated by `__`
+                    num = int(spl[0].split('/')[-1]) # remove prefix (for linux)
+                    heapq.heappush(heap, num)
+        if len(heap) > 0:
+            return heapq.nlargest(1, heap)[0] + 1
         else:
             return 0
+        
+        #if os.path.isfile(results_file_path):
+        #    with open(results_file_path, 'r') as ff:
+        #        exp_data_txt = ff.readlines()
+        #    
+        #    exp_data = []
+        #    for ll in exp_data_txt:
+        #        exp_data.append( json.loads(ll) )
+        #    
+        #    max_ind = np.max( [dd['ind'] for dd in exp_data] ) + 1
+        #    return  int(max_ind)
+        #else:
+        #    return 0
     
     @staticmethod
     def look_at_hyperparameters_search(file_path, result_names=('mse',), higher_better=(False,), output_top_n=(10,)):
@@ -268,7 +306,7 @@ class hp_search_base(object):
             p_clean (str): if true - clear the folder if false - do nothing
         """
         
-        path = self.log_folder
+        path = self.experiment_folder
         if p_clean:
             for the_file in os.listdir(path):
                 file_path = os.path.join(path, the_file)
