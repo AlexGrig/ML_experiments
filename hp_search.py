@@ -13,7 +13,7 @@ import time
 import heapq
 from pathlib import Path
 
-class hp_search_base(object):
+class HPSearchBase(object):
     
     def __init__(self, experiment_name='experiment', experiment_folder = None, search_method='random', seed=66, fixed_params_class_attr_name = 'fixed_params', **kwargs):
         """
@@ -217,23 +217,6 @@ class hp_search_base(object):
         else:
             pass
         print("Experiment finished")
-        
-#    @staticmethod
-#    def _save_evaluation(results_file_path, run_ind, params_vals, fixed_params, res):
-#        
-#        #import pdb; pdb.set_trace()
-#        if isinstance(res, Mapping):
-#            output = {'ind': run_ind, 'params': params_vals, 'fixed_params': fixed_params,'results': res }
-#        elif isinstance(res, Sequence):
-#            output = {'ind': run_ind, 'params': params_vals, 'fixed_params': fixed_params, 'results': { i:r for i,r in enumerate(res) } }
-#        else: # assume res is 1 value
-#            output = {'ind': run_ind, 'params': params_vals, 'fixed_params': fixed_params, 'results': { 0:res } }
-#            
-#        results_json = json.dumps( output )
-#        
-#        with open(results_file_path,"a") as ff:
-#            ff.write(results_json + '\n')
-#            ff.flush()
             
     @staticmethod
     def _read_last_evaluation_ind(experiment_folder):
@@ -250,19 +233,6 @@ class hp_search_base(object):
             return heapq.nlargest(1, heap)[0] + 1
         else:
             return 0
-        
-        #if os.path.isfile(results_file_path):
-        #    with open(results_file_path, 'r') as ff:
-        #        exp_data_txt = ff.readlines()
-        #    
-        #    exp_data = []
-        #    for ll in exp_data_txt:
-        #        exp_data.append( json.loads(ll) )
-        #    
-        #    max_ind = np.max( [dd['ind'] for dd in exp_data] ) + 1
-        #    return  int(max_ind)
-        #else:
-        #    return 0
     
     @staticmethod
     def look_at_hyperparameters_search(file_path, result_names=('mse',), higher_better=(False,), output_top_n=(10,)):
