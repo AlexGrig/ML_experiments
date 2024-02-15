@@ -4,6 +4,8 @@
 from collections.abc import Sequence
 from collections.abc import Mapping
 from collections import OrderedDict
+from collections import defaultdict
+
 import numpy as np
 import json
 import os
@@ -62,6 +64,7 @@ class hp_search_base(object):
         hp_order = []
         
         short_names = {}
+        short_vals = defaultdict(dict)
         
         for key in cls.__dict__.keys():
             if key.startswith('hp_'):
@@ -69,8 +72,17 @@ class hp_search_base(object):
                 real_key = key[3:]
                 #import pdb;pdb.set_trace()
                 if isinstance(val, Mapping):
+                    
                     hp_values.append( val['val'] )
-                    hp_order.append( ( real_key,val['ord']) )
+                    if val.get('order', False):
+                        hp_order.append( ( real_key, val['order']) )
+                    else:
+                        hp_order.append( ( real_key, val['ord']) ) # this is kept for historical reasons.
+                        
+                    if val.get('short_vals', False):
+                        for vv, short_vv in zip(val['val'], val['short_vals']):
+                            short_vals[real_key][vv] = short_vv
+                    
                 if isinstance(val,Sequence):
                     hp_values.append( val )
                     
@@ -79,7 +91,7 @@ class hp_search_base(object):
                     
                 hp_names.append( real_key )
                 
-        return hp_names, hp_values, hp_order, short_names
+        return hp_names, hp_values, hp_order, short_names, short_vals
     
     @staticmethod
     def params_values_list_random(seed, hp_names, hp_values, hp_order):
@@ -125,19 +137,32 @@ class hp_search_base(object):
         Outputs the list with all values of hyperparameters.
         """
         
-        hp_names, hp_values, hp_order, short_param_names = self._get_hp_values()
+        hp_names, hp_values, hp_order, short_param_names, short_param_vals = self._get_hp_values()
         if self.search_method == 'random':
             params_list = self.params_values_list_random(self.seed, hp_names, hp_values, hp_order)
             
         elif self.search_method == 'grid_search':
             params_list = self.params_values_list_grid(hp_names, hp_values, hp_order)
             
-        return params_list, short_param_names
+        return params_list, short_param_names, short_param_vals
     
     @staticmethod
-    def run_folder_name(run_ind, params_vals, short_param_names):
+    def run_folder_name(run_ind, params_vals, short_param_names, short_param_vals):
         
-        pv = [(short_param_names.get(kk, kk) + f'={vv}') for (kk,vv) in params_vals.items()]
+        def get_short_value(param_name, param_val):
+            if short_param_vals.get(param_name, False):
+                if short_param_vals[param_name].get(param_val, False):
+                    return short_param_vals[param_name][param_val]
+                    
+                else:
+                    return param_val
+                
+            else:
+                return param_val
+            
+        pv = [(short_param_names.get(kk, kk) + f'={get_short_value(kk,vv)}') for (kk,vv) in params_vals.items()]
+        
+        #import pdb; pdb.set_trace()
         
         folder_name = str(run_ind) + '__' + '__'.join(pv)
         folder_name = folder_name.replace('.','_')
@@ -146,7 +171,7 @@ class hp_search_base(object):
     def before_experiment_run(self, **params):
         pass
     
-    def before_single_run(self, **run_params):
+    def before_single_run(self, run_folder, **params_to_run):
         pass
         
     def run(self, **run_params):
@@ -162,17 +187,7 @@ class hp_search_base(object):
             None, outputs to the file.
         """
         
-        params_list, short_param_names = self.get_iter_params()
-        
-        ## Run 'before_run' ->
-        #self.before_run(**before_run_params)
-        ## Run 'before_run' <-
-        
-        # Folder and log file ->
-        #if not os.path.isdir(self.log_folder): # folder does not exist
-        #    os.mkdir(self.log_folder)
-            
-        #results_file_path = os.path.join(self.log_folder, self.experiment_name + self.results_file_postfix )
+        params_list, short_param_names, short_param_vals = self.get_iter_params()
         
         start_ind = self._read_last_evaluation_ind(self.experiment_folder)
         # Folder and log file <-
@@ -185,7 +200,7 @@ class hp_search_base(object):
                 tt = time.time()
                 params_to_run = {**params_vals, **self.fixed_params}
                 
-                folder_name = self.run_folder_name(run_ind, params_to_run, short_param_names)
+                folder_name = self.run_folder_name(run_ind, params_to_run, short_param_names, short_param_vals)
                 
                 params_to_run = self.before_single_run(self.experiment_folder / folder_name, 
                                                        **params_to_run) # possibly change params.
